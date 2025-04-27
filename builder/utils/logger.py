@@ -72,6 +72,39 @@ class Logger:
         self.pred_results = []
         self.ans_results = []
 
+    def val_result_only(self):
+        """Prints the best validation results recorded during training."""
+        
+        os.system("echo  \'##### Best Validation results in history #####\'")
+        
+        # Check if any validation results were recorded
+        if not hasattr(self, 'best_result_so_far') or len(self.best_result_so_far) == 0:
+             os.system("echo  \'No validation results recorded.\'")
+             return
+
+        if self.args.task_type == "binary" or self.args.task_type == "binary_noslice":
+            # Check if best_results has the expected format
+            if hasattr(self, 'best_results') and len(self.best_results) == 4:
+                 os.system("echo  \'auc: {}, apr: {}, f1_score: {}\'".format(str(self.best_result_so_far[0]), str(self.best_result_so_far[1]), str(self.best_result_so_far[2])))
+                 os.system("echo  \'tpr: {}, fnr: {}, tnr: {}, fpr: {}\'".format(str(self.best_results[0]), str(self.best_results[1]), str(self.best_results[2]), str(self.best_results[3])))
+            else:
+                 os.system("echo  \'Best validation results format is unexpected.\'")
+                 # Optionally print what is available
+                 os.system("echo  \'Best metrics so far: {}\'".format(str(self.best_result_so_far)))
+
+
+        else: # Handling multiclass case based on existing code patterns
+            # Check if best_results has the expected format
+            if hasattr(self, 'best_results') and isinstance(self.best_results, list):
+                 os.system("echo  \'multi_weighted: auc: {}, apr: {}, f1_score: {}\'".format(str(self.best_result_so_far[0]), str(self.best_result_so_far[2]), str(self.best_result_so_far[4])))
+                 os.system("echo  \'multi_unweighted: auc: {}, apr: {}, f1_score: {}\'".format(str(self.best_result_so_far[1]), str(self.best_result_so_far[3]), str(self.best_result_so_far[5])))
+                 os.system("echo  \'##### Each class Best Validation results #####\'")
+                 for i in self.best_results:
+                      os.system("echo  \'{}\'".format(i))
+            else:
+                 os.system("echo  \'Best validation results format is unexpected.\'")
+                 # Optionally print what is available
+                 os.system("echo  \'Best metrics so far: {}\'".format(str(self.best_result_so_far)))
 
     def log_tqdm(self, epoch, step, pbar):
         tqdm_log = "Epochs: {}, Iteration: {}, Loss: {}".format(str(epoch), str(step), str(self.loss / step))

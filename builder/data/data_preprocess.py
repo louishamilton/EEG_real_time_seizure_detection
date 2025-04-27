@@ -229,8 +229,8 @@ def get_data_preprocessed(args, mode="train"):
    
     print("Preparing data for bianry detector...")
     train_data_path = args.data_path + "/dataset-tuh_task-binary_datatype-train_v6"
-    # dev_data_path = args.data_path + "/dataset-tuh_task-binary_datatype-dev_v6"
-    dev_data_path = args.data_path + "/dataset-tuh_task-binary_noslice_datatype-dev_v6"
+    dev_data_path = args.data_path + "/dataset-tuh_task-binary_datatype-dev_v6"
+    #dev_data_path = args.data_path + "/dataset-tuh_task-binary_noslice_datatype-dev_v6"
     train_dir = search_walk({"path": train_data_path, "extension": ".pkl"})
     dev_dir = search_walk({"path": dev_data_path, "extension": ".pkl"})
     random.shuffle(train_dir)

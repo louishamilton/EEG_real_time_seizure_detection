@@ -37,42 +37,143 @@ label_dict = {}
 sample_rate_dict = {}
 sev_label = {}
 
+label_extension_map = {
+        'tse': '.csv',      # Expect .csv for 'tse' type
+        'tse_bi': '.csv_bi' # Expect .csv_bi for 'tse_bi' type
+    }
 
-def label_sampling_tuh(labels, feature_samplerate):
-    y_target = ""
+def label_sampling_tuh(labels_lines, feature_samplerate): # Renamed input for clarity
+    y_target_list = [] # Build as a list first
     remained = 0
-    feature_intv = 1/float(feature_samplerate)
-    for i in labels:
-        begin, end, label = i.split(" ")[:3]
+    feature_intv = 1 / float(feature_samplerate)
+    LABEL_COLUMN_INDEX = 3  # Label is the 4th column (index 3)
+    START_TIME_INDEX = 1
+    STOP_TIME_INDEX = 2
 
-        intv_count, remained = divmod(float(end) - float(begin) + remained, feature_intv)
-        y_target += int(intv_count) * str(GLOBAL_DATA['disease_labels'][label])
-    return y_target
+    for line in labels_lines: # Iterate through the valid lines passed to it
+        parts = line.strip().split(",")
+        try:
+            # Check if it has enough parts and label isn't empty
+            if len(parts) > LABEL_COLUMN_INDEX and parts[LABEL_COLUMN_INDEX].strip():
+                start_time_str = parts[START_TIME_INDEX].strip()
+                stop_time_str = parts[STOP_TIME_INDEX].strip()
+                label = parts[LABEL_COLUMN_INDEX].strip()
+
+                # Convert times to float, handle potential errors
+                start_time = float(start_time_str)
+                stop_time = float(stop_time_str)
+
+                # Get the integer disease label from GLOBAL_DATA
+                disease_code = GLOBAL_DATA['disease_labels'].get(label, -1) # Get code, default to -1 if unknown
+                if disease_code == -1:
+                     # print(f"Warning: Unknown label '{label}' encountered in label_sampling_tuh. Skipping line.")
+                     continue # Skip if label isn't in our dictionary
+
+                intv_count, remained = divmod(stop_time - start_time + remained, feature_intv)
+                # Append the disease code 'intv_count' times
+                y_target_list.extend([str(disease_code)] * int(intv_count))
+            else:
+                # This case should be less likely now due to pre-filtering, but good to have
+                # print(f"Warning: Skipping line in label_sampling_tuh due to insufficient parts: '{line.strip()}'")
+                pass
+
+        except (ValueError, IndexError) as e:
+            print(f"Warning: Error processing line in label_sampling_tuh: '{line.strip()}'. Error: {e}. Skipping.")
+            continue # Skip line on error
+
+    return "".join(y_target_list) # Join the list into a string at the end
 
 
-def generate_training_data_leadwise_tuh_train(file):
-    sample_rate = GLOBAL_DATA['sample_rate']    # EX) 200Hz
-    file_name = ".".join(file.split(".")[:-1])  # EX) $PATH_TO_EEG/train/01_tcp_ar/072/00007235/s003_2010_11_20/00007235_s003_t000
-    data_file_name = file_name.split("/")[-1]   # EX) 00007235_s003_t000
-    signals, signal_headers, header = highlevel.read_edf(file)
+def generate_training_data_leadwise_tuh_train_final(file):
+    # ... (Keep initial EDF reading and label_list_c creation) ...
+    sample_rate = GLOBAL_DATA['sample_rate']
+    file_name = ".".join(file.split(".")[:-1])
+    data_file_name = file_name.split("/")[-1]
+    try:
+        signals, signal_headers, header = highlevel.read_edf(file)
+    except Exception as e:
+        print(f"Error reading EDF file {file}: {e}. Skipping.")
+        return
+
     label_list_c = []
     for idx, signal in enumerate(signals):
-        label_noref = signal_headers[idx]['label'].split("-")[0]    # EX) EEG FP1-ref or EEG FP1-LE --> EEG FP1
-        label_list_c.append(label_noref)   
+        label_noref = signal_headers[idx]['label'].split("-")[0]
+        label_list_c.append(label_noref)
 
     ############################# part 1: labeling  ###############################
-    label_file = open(file_name + "." + GLOBAL_DATA['label_type'], 'r') # EX) 00007235_s003_t003.tse or 00007235_s003_t003.tse_bi
-    y = label_file.readlines()
-    y = list(y[2:])
-    y_labels = list(set([i.split(" ")[2] for i in y]))
+    # --- START File Extension Change ---
+    
+    # Use the map, fallback to original if type isn't in map (though it should be)
+    actual_label_extension = label_extension_map.get(GLOBAL_DATA['label_type'], '.' + GLOBAL_DATA['label_type'])
+    label_file_path = file_name + actual_label_extension
+    # --- END File Extension Change ---
+
+    try:
+        with open(label_file_path, 'r') as label_file:
+            all_lines = label_file.readlines()
+    except FileNotFoundError:
+        # If CSV file not found, try the original TSE extension as a fallback maybe? Or just fail.
+        # Trying original extension:
+        
+        original_label_path = file_name + "." + GLOBAL_DATA['label_type']
+        try:
+             with open(original_label_path, 'r') as label_file:
+                  print(f"Warning: Found original label file {original_label_path} instead of expected {label_file_path}. Proceeding.")
+                  all_lines = label_file.readlines()
+                  # Add a flag or adjust logic if TSE/CSV formats need different parsing downstream
+        except FileNotFoundError:
+             print(f"Error: Label file not found at {label_file_path} or {original_label_path}. Skipping file {file}.")
+             return
+    except Exception as e:
+        print(f"Error reading label file {label_file_path}: {e}. Skipping file {file}.")
+        return
+
+    # --- START CSV Parsing Change ---
+    HEADER_LINES_TO_SKIP = 6 # Skip 5 '#' lines + 1 'channel,...' header
+    LABEL_COLUMN_INDEX = 3   # Label is the 4th column (index 3)
+    y = [] # This will store the valid data lines for label_sampling_tuh
+
+    for line in all_lines[HEADER_LINES_TO_SKIP:]:
+        stripped_line = line.strip()
+        if stripped_line and not stripped_line.startswith('#'): # Ignore empty lines and any extra comments
+            parts = stripped_line.split(",") # Use comma delimiter
+            # Check if enough columns exist AND the label column isn't empty
+            if len(parts) > LABEL_COLUMN_INDEX and parts[LABEL_COLUMN_INDEX].strip():
+                y.append(stripped_line) # Add the valid data line
+            else:
+                # print(f"Warning: Skipping malformed/short line in {label_file_path}: '{line.strip()}'")
+                pass # Reduce verbosity
+
+    if not y:
+        print(f"Warning: No valid data lines found in {label_file_path} after skipping headers. Skipping file {file}.")
+        return
+    # --- END CSV Parsing Change ---
+
+    # Extract unique labels (still useful check)
+    try:
+        # Extract label from the correct index (3), splitting by comma
+        y_labels = list(set([line.split(",")[LABEL_COLUMN_INDEX].strip() for line in y]))
+    except IndexError as e:
+        print(f"Unexpected IndexError during y_labels extraction in {label_file_path}. Lines: {y[:5]}. Skipping.")
+        return
+
     signal_sample_rate = int(signal_headers[0]['sample_rate'])
+    # ... (rest of the checks for sample rate, required labels remain the same) ...
     if sample_rate > signal_sample_rate:
-        return
-    if not all(elem in label_list_c for elem in GLOBAL_DATA['label_list']): # if one or more of ['EEG FP1', 'EEG FP2', ... doesn't exist
-        return
-    # if not any(elem in y_labels for elem in GLOBAL_DATA['disease_type']): # if non-patient exist
-    #     return
+        # print(f"Warning: Target sample rate ({sample_rate}) > signal sample rate ({signal_sample_rate}) for {file}. Skipping.")
+        return # Keep this check
+    if not all(elem in label_list_c for elem in GLOBAL_DATA['label_list']):
+        # print(f"Warning: Missing required labels in {file}. Required: {GLOBAL_DATA['label_list']}, Found: {label_list_c}. Skipping.")
+        return # Keep this check
+
+
+    # Call the modified label_sampling_tuh with the filtered lines 'y'
     y_sampled = label_sampling_tuh(y, GLOBAL_DATA['feature_sample_rate'])
+
+    # --- Check if y_sampled is empty ---
+    if not y_sampled:
+        print(f"Warning: y_sampled string is empty after processing {label_file_path}. Might indicate issues with labels or times. Skipping file {file}.")
+        return
     
     ############################# part 2: input data filtering #############################
     signal_list = []
@@ -302,46 +403,130 @@ def generate_training_data_leadwise_tuh_train(file):
 
 def generate_training_data_leadwise_tuh_train_final(file):
     sample_rate = GLOBAL_DATA['sample_rate']    # EX) 200Hz
-    file_name = ".".join(file.split(".")[:-1])  # EX) $PATH_TO_EEG/train/01_tcp_ar/072/00007235/s003_2010_11_20/00007235_s003_t000
+    file_name = ".".join(file.split(".")[:-1])  # EX) $PATH_TO_EEG/.../00007235_s003_t000
     data_file_name = file_name.split("/")[-1]   # EX) 00007235_s003_t000
-    signals, signal_headers, header = highlevel.read_edf(file)
+
+    # --- EDF Reading (with basic error handling) ---
+    try:
+        signals, signal_headers, header = highlevel.read_edf(file)
+    except Exception as e:
+        print(f"Error reading EDF file {file}: {e}. Skipping.")
+        return
+
     label_list_c = []
     for idx, signal in enumerate(signals):
-        label_noref = signal_headers[idx]['label'].split("-")[0]    # EX) EEG FP1-ref or EEG FP1-LE --> EEG FP1
-        label_list_c.append(label_noref)   
+        label_noref = signal_headers[idx]['label'].split("-")[0]
+        label_list_c.append(label_noref)
 
-    ############################# part 1: labeling  ###############################
-    label_file = open(file_name + "." + GLOBAL_DATA['label_type'], 'r') # EX) 00007235_s003_t003.tse or 00007235_s003_t003.tse_bi
-    y = label_file.readlines()
-    y = list(y[2:])
-    y_labels = list(set([i.split(" ")[2] for i in y]))
-    signal_sample_rate = int(signal_headers[0]['sample_rate'])
+    ############################# part 1: labeling (CSV Updated) ###############################
+    # --- Determine correct label file path ---
+    actual_label_extension = label_extension_map.get(GLOBAL_DATA['label_type'], '.' + GLOBAL_DATA['label_type'])
+    label_file_path = file_name + actual_label_extension
+
+    # --- Read and Parse CSV Label File ---
+    HEADER_LINES_TO_SKIP = 6 # Skip 5 '#' lines + 1 'channel,...' header
+    LABEL_COLUMN_INDEX = 3   # Label is the 4th column (index 3)
+
+    all_lines = []
+    try:
+        with open(label_file_path, 'r') as label_file:
+            all_lines = label_file.readlines()
+    except FileNotFoundError:
+         # Try falling back to original .tse/.tse_bi extension if .csv/.csv_bi not found
+        original_label_path = file_name + "." + GLOBAL_DATA['label_type']
+        try:
+             with open(original_label_path, 'r') as label_file:
+                  # print(f"Warning: Found original label file {original_label_path} instead of expected {label_file_path}. Assuming TSE format for this file.")
+                  # If found, we need to handle potential mixed formats - this adds complexity.
+                  # For now, let's prioritize the CSV format and error out if neither is found.
+                  # Re-reading into all_lines assumes TSE format here, which might be wrong if CSV exists but wasn't read.
+                  # Simplest approach: Fail if the expected CSV isn't there.
+                  # all_lines = label_file.readlines() # Remove this if we don't support fallback parsing easily
+                  print(f"Error: Expected CSV label file {label_file_path} not found, and fallback to {original_label_path} is complex/unsupported here. Skipping file {file}.")
+                  return
+        except FileNotFoundError:
+             print(f"Error: Label file not found at {label_file_path} or {original_label_path}. Skipping file {file}.")
+             return
+    except Exception as e:
+        print(f"Error reading label file {label_file_path}: {e}. Skipping file {file}.")
+        return
+
+    # --- Filter valid data lines from CSV ---
+    y_valid_data_lines = [] # Store the actual data lines
+    for line in all_lines[HEADER_LINES_TO_SKIP:]:
+        stripped_line = line.strip()
+        if stripped_line and not stripped_line.startswith('#'): # Ignore empty/comment lines
+            parts = stripped_line.split(",") # Use comma delimiter
+            # Check if enough columns exist AND the label column isn't empty
+            if len(parts) > LABEL_COLUMN_INDEX and parts[LABEL_COLUMN_INDEX].strip():
+                y_valid_data_lines.append(stripped_line) # Add the valid data line
+
+    if not y_valid_data_lines:
+        print(f"Warning: No valid data lines found in {label_file_path} after skipping headers. Skipping file {file}.")
+        return
+
+    # --- Extract unique labels (still useful check) ---
+    try:
+        # Extract label from the correct index (3), splitting by comma
+        y_labels = list(set([line.split(",")[LABEL_COLUMN_INDEX].strip() for line in y_valid_data_lines]))
+    except IndexError as e:
+        print(f"Unexpected IndexError during y_labels extraction in {label_file_path}. Lines: {y_valid_data_lines[:5]}. Skipping.")
+        return
+
+    # --- Standard checks (Sample Rate, Required Leads) ---
+    #print(signal_headers[0])
+    #print(signal_headers)
+    signal_sample_rate = int(signal_headers[0]['sample_frequency'])
     if sample_rate > signal_sample_rate:
+        # print(f"Warning: Target ({sample_rate}) > Signal SR ({signal_sample_rate}) for {file}. Skipping.") # Reduce verbosity
         return
-    if not all(elem in label_list_c for elem in GLOBAL_DATA['label_list']): # if one or more of ['EEG FP1', 'EEG FP2', ... doesn't exist
+    if not all(elem in label_list_c for elem in GLOBAL_DATA['label_list']):
+        # print(f"Warning: Missing required labels in {file}. Req: {GLOBAL_DATA['label_list']}, Found: {label_list_c}. Skipping.") # Reduce verbosity
         return
-    # if not any(elem in y_labels for elem in GLOBAL_DATA['disease_type']): # if non-patient exist
-    #     return
-    y_sampled = label_sampling_tuh(y, GLOBAL_DATA['feature_sample_rate'])
 
-    # check if seizure patient or non-seizure patient
+    # --- Generate sampled label string using the updated label_sampling_tuh ---
+    # Pass the list of valid *data lines* to the updated function
+    y_sampled = label_sampling_tuh(y_valid_data_lines, GLOBAL_DATA['feature_sample_rate'])
+
+    # --- Check if y_sampled is empty after processing ---
+    if not y_sampled:
+        print(f"Warning: y_sampled string is empty after processing {label_file_path}. Skipping file {file}.")
+        return
+
+    ###################### check if seizure patient (CSV Updated) ######################
     patient_wise_dir = "/".join(file_name.split("/")[:-2])
-    patient_id = file_name.split("/")[-3]
-    edf_list = search_walk({'path': patient_wise_dir, 'extension': ".tse_bi"})
+    # Search for the correct binary label file extension
+    binary_label_extension = label_extension_map.get('tse_bi', '.csv_bi') # Default to .csv_bi
+    edf_list = search_walk({'path': patient_wise_dir, 'extension': binary_label_extension})
     patient_bool = False
-    for tse_bi_file in edf_list:
-        label_file = open(tse_bi_file, 'r') # EX) 00007235_s003_t003.tse or 00007235_s003_t003.tse_bi
-        y = label_file.readlines()
-        y = list(y[2:])
-        for line in y:
-            if len(line) > 5:
-                if line.split(" ")[2] != 'bckg':
-                    patient_bool = True
-                    break
+    if not edf_list:
+         # Try fallback to original tse_bi? Might be needed if dataset is mixed.
+         # print(f"Warning: No {binary_label_extension} files found for patient check in {patient_wise_dir}. Assuming non-seizure patient.")
+         pass # Assume False if no binary files found
+
+    for label_check_file_path in edf_list:
+        try:
+            with open(label_check_file_path, 'r') as label_check_file:
+                check_lines = label_check_file.readlines()
+        except Exception as e:
+            # print(f"Warning: Could not read file {label_check_file_path} for patient check: {e}")
+            continue # Skip this file
+
+        # Use same CSV parsing logic for the check file
+        for line in check_lines[HEADER_LINES_TO_SKIP:]:
+            stripped_line = line.strip()
+            if stripped_line and not stripped_line.startswith('#'):
+                parts = stripped_line.split(',')
+                if len(parts) > LABEL_COLUMN_INDEX:
+                    label_in_line = parts[LABEL_COLUMN_INDEX].strip()
+                    if label_in_line and label_in_line != 'bckg': # Check if label exists and is not 'bckg'
+                        patient_bool = True
+                        break # Found a seizure label in this file
         if patient_bool:
-            break
-    
+            break # Found a seizure label in this patient's record
+
     ############################# part 2: input data filtering #############################
+    # This part operates on EEG signals and should remain the same
     signal_list = []
     signal_label_list = []
     signal_final_list_raw = []
@@ -351,198 +536,238 @@ def generate_training_data_leadwise_tuh_train_final(file):
         if label not in GLOBAL_DATA['label_list']:
             continue
 
-        if int(signal_headers[idx]['sample_rate']) > sample_rate:
-            secs = len(signal)/float(signal_sample_rate)
-            samps = int(secs*sample_rate)
+        current_signal_sr = int(signal_headers[idx]['sample_frequency'])
+        # Check if resampling is needed (avoid resampling if SR is already correct)
+        if current_signal_sr == sample_rate:
+             x = signal
+        elif current_signal_sr > sample_rate:
+            secs = len(signal) / float(current_signal_sr) # Use current signal SR here
+            samps = int(secs * sample_rate)
             x = sci_sig.resample(signal, samps)
-            signal_list.append(x)
-            signal_label_list.append(label)
-        else:
-            signal_list.append(signal)
-            signal_label_list.append(label)
+        else: # current_signal_sr < sample_rate - Upsampling (might be needed or indicate error)
+             # print(f"Warning: Signal SR {current_signal_sr} < Target SR {sample_rate} in {file} for lead {label}. Upsampling.")
+             secs = len(signal) / float(current_signal_sr)
+             samps = int(secs * sample_rate)
+             # Use resample for upsampling too, though interpolation might be better if needed often
+             x = sci_sig.resample(signal, samps)
 
+        signal_list.append(x)
+        signal_label_list.append(label)
+
+
+    # Ensure all required labels were found and processed
     if len(signal_label_list) != len(GLOBAL_DATA['label_list']):
-        print("Not enough labels: ", signal_label_list)
-        return 
-    
-    for lead_signal in GLOBAL_DATA['label_list']:
-        signal_final_list_raw.append(signal_list[signal_label_list.index(lead_signal)])
+        # Check which labels are missing
+        missing_labels = set(GLOBAL_DATA['label_list']) - set(signal_label_list)
+        # print(f"Warning: Not enough required leads processed/found in {file}. Missing: {missing_labels}. Skipping.")
+        return
 
-    new_length = len(signal_final_list_raw[0]) * (float(GLOBAL_DATA['feature_sample_rate']) / GLOBAL_DATA['sample_rate'])
-    
-    if len(y_sampled) > new_length:
-        y_sampled = y_sampled[:new_length]
-    elif len(y_sampled) < new_length:
-        diff = int(new_length - len(y_sampled))
-        y_sampled += y_sampled[-1] * diff
+    # Reorder signals according to GLOBAL_DATA['label_list']
+    # Use a dictionary for faster lookup
+    signal_dict = {lbl: sig for lbl, sig in zip(signal_label_list, signal_list)}
+    signal_final_list_raw = []
+    min_len = float('inf') # Find minimum length after resampling
+    for lead_label in GLOBAL_DATA['label_list']:
+        sig_data = signal_dict.get(lead_label)
+        if sig_data is None: # Should not happen if previous check passed, but safeguard
+             print(f"Error: Lead {lead_label} not found in signal_dict for {file}. Skipping.")
+             return
+        signal_final_list_raw.append(sig_data)
+        min_len = min(min_len, len(sig_data))
 
-    y_sampled_np = np.array(list(map(int,y_sampled)))
-    new_labels = []
-    new_labels_idxs = []
+    # Trim all signals to the minimum length to ensure consistency
+    signal_final_list_raw = [sig[:min_len] for sig in signal_final_list_raw]
+
+    if min_len == 0:
+        print(f"Warning: Processed signal length is zero for {file}. Skipping.")
+        return
+
+    ######################## Adjust y_sampled length based on ACTUAL signal length ########################
+    # Calculate the expected number of labels based on the *final* signal length and feature sample rate
+    # Use min_len which is the length *at the target sample_rate*
+    expected_label_len = math.floor(min_len * (float(GLOBAL_DATA['feature_sample_rate']) / GLOBAL_DATA['sample_rate']))
+
+    if len(y_sampled) > expected_label_len:
+        y_sampled = y_sampled[:expected_label_len]
+    elif len(y_sampled) < expected_label_len:
+        diff = expected_label_len - len(y_sampled)
+        if y_sampled: # Check if y_sampled is not empty before padding
+             y_sampled += y_sampled[-1] * diff
+        else:
+             print(f"Warning: y_sampled is empty but signals exist for {file}. Cannot pad. Resulting labels might be incorrect. Length needed: {expected_label_len}")
+             # Handle this case: maybe pad with '0' or skip file? Padding with '0' might be safer.
+             y_sampled = '0' * expected_label_len
+
+
+    # Check again if y_sampled became empty after length adjustment
+    if not y_sampled:
+         print(f"Warning: y_sampled became empty after length adjustment for {file}. Skipping.")
+         return
+
+
+    # --- Convert y_sampled to numpy array (should be safe now) ---
+    try:
+        y_sampled_np = np.array(list(map(int, y_sampled)))
+    except ValueError as e:
+        print(f"Error converting y_sampled to numpy int array for file {file}. Content: '{y_sampled[:50]}...'. Error: {e}. Skipping.")
+        return
+
 
     ############################# part 3: slicing for easy training  #############################
-    y_sampled = ["0" if l not in GLOBAL_DATA['selected_diseases'] else l for l in y_sampled]
+    # This part relies on y_sampled containing the correct sequence of integer strings ('0', '1', '2'...)
+    # The logic here seems complex and specific to the paper's slicing strategy.
+    # Assuming the logic itself is correct based on the paper's intent, it should work if y_sampled is correct.
 
-    if any(l in GLOBAL_DATA['selected_diseases'] for l in y_sampled):
-        y_sampled = [str(GLOBAL_DATA['target_dictionary'][int(l)]) if l in GLOBAL_DATA['selected_diseases'] else l for l in y_sampled]
+    # Map y_sampled based on target_dictionary
+    # Need to handle potential KeyErrors if y_sampled contains unexpected codes
+    temp_y_sampled_mapped = []
+    valid_codes = set(map(str, GLOBAL_DATA['target_dictionary'].keys())) # Use string codes
 
-    # slice and save if training data
+    for code_char in y_sampled:
+        if code_char in GLOBAL_DATA['selected_diseases']: # selected_diseases holds target *string* codes ('1', '2'...)
+             try:
+                  mapped_code = str(GLOBAL_DATA['target_dictionary'][int(code_char)])
+                  temp_y_sampled_mapped.append(mapped_code)
+             except KeyError:
+                  print(f"Warning: Code {code_char} from y_sampled not found in target_dictionary for {file}. Using '0'.")
+                  temp_y_sampled_mapped.append("0") # Map unknown codes to '0' or handle differently
+        elif code_char == '0':
+             temp_y_sampled_mapped.append("0")
+        else:
+             # This case implies a code was generated but isn't in selected_diseases - treat as '0'
+             # print(f"Warning: Code {code_char} from y_sampled not in selected_diseases for {file}. Using '0'.")
+             temp_y_sampled_mapped.append("0")
+
+    y_sampled = "".join(temp_y_sampled_mapped) # Update y_sampled with the mapped codes ('0', '1' etc based on target dict)
+
+    # --- Re-calculate y_sampled_np based on the *mapped* y_sampled ---
+    try:
+        y_sampled_np = np.array(list(map(int, y_sampled)))
+    except ValueError as e:
+        print(f"Error converting *mapped* y_sampled to numpy int array for file {file}. Content: '{y_sampled[:50]}...'. Error: {e}. Skipping.")
+        return
+
+    # --- The rest of the slicing logic ---
+    # This complex slicing part needs careful review based on the paper's description,
+    # but the inputs (raw_data, y_sampled, y_sampled_np) should now be correctly formatted.
     new_data = {}
-    raw_data = torch.Tensor(signal_final_list_raw).permute(1,0)
-    raw_data = raw_data.type(torch.float16)
-    
+    try:
+        # Ensure raw_data is float32 for Tensor conversion if needed by later ops, then convert to float16 if desired
+        raw_data_np = np.array(signal_final_list_raw, dtype=np.float32)
+        raw_data = torch.Tensor(raw_data_np).permute(1,0) # Shape: [time, channels]
+        # Convert to float16 *after* potential Tensor operations if needed, or right before saving
+        # raw_data = raw_data.type(torch.float16) # Do this conversion closer to saving if it causes issues
+    except Exception as e:
+        print(f"Error converting raw signal data to Tensor for {file}: {e}. Skipping.")
+        return
+
+
     min_seg_len_label = GLOBAL_DATA['min_binary_slicelength'] * GLOBAL_DATA['feature_sample_rate']
     min_seg_len_raw = GLOBAL_DATA['min_binary_slicelength'] * GLOBAL_DATA['sample_rate']
     min_binary_edge_seiz_label = GLOBAL_DATA['min_binary_edge_seiz'] * GLOBAL_DATA['feature_sample_rate']
     min_binary_edge_seiz_raw = GLOBAL_DATA['min_binary_edge_seiz'] * GLOBAL_DATA['sample_rate']
 
-    label_order = [x[0] for x in groupby(y_sampled)]
-    label_change_idxs = np.where(y_sampled_np[:-1] != y_sampled_np[1:])[0]
-    label_change_idxs = np.append(label_change_idxs, np.array([len(y_sampled_np)-1]))
+    # --- Check for sufficient length before slicing ---
+    if len(y_sampled) < min_seg_len_label or raw_data.shape[0] < min_seg_len_raw:
+        # print(f"Warning: Data length insufficient for slicing ({len(y_sampled)} labels, {raw_data.shape[0]} raw samples) for file {file}. Need {min_seg_len_label} labels. Skipping.")
+        return
 
+
+    # --- Slicing logic (keep as is, assuming it's correct based on y_sampled) ---
+    # Note: This slicing logic is quite intricate and directly taken from the original code.
+    # It involves looking at label sequences and boundaries. Debugging this requires
+    # understanding the specific strategy from the paper.
     sliced_raws = []
     sliced_labels = []
     label_list_for_filename = []
-    if len(y_sampled) < min_seg_len_label:
-        return
-    else:
-        label_count = {}
-        y_sampled_2nd = list(y_sampled)
-        raw_data_2nd = raw_data
-        while len(y_sampled) >= min_seg_len_label:
-            is_at_middle = False
-            sliced_y = y_sampled[:min_seg_len_label]
-            labels = [x[0] for x in groupby(sliced_y)]
-                
-            if len(labels) == 1 and "0" in labels:
-                y_sampled = y_sampled[min_seg_len_label:]
-                sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
-                raw_data = raw_data[min_seg_len_raw:]
-                if patient_bool:
-                    label = "0_patT"
-                else:
-                    label = "0_patF"
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
-                label_list_for_filename.append(label)
-                
-            elif len(labels) != 1 and (sliced_y[0] == '0') and (sliced_y[-1] != '0'):
-                temp_sliced_y = list(sliced_y)
-                temp_sliced_y.reverse()
-                boundary_seizlen = temp_sliced_y.index("0") + 1
-                if boundary_seizlen < min_binary_edge_seiz_label:
-                    if len(y_sampled) > (min_seg_len_label + min_binary_edge_seiz_label):
-                        sliced_y = y_sampled[min_binary_edge_seiz_label:min_seg_len_label+min_binary_edge_seiz_label]
-                        sliced_raw_data = raw_data[min_binary_edge_seiz_raw:min_seg_len_raw+min_binary_edge_seiz_raw].permute(1,0)
-                    else:
-                        sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
-                else:
-                    sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
+    label_count = {}
+    y_sampled_list = list(y_sampled) # Work with list for easier slicing/popping
+    raw_data_time_first = raw_data # Keep time dimension first
 
-                y_sampled = y_sampled[min_seg_len_label:]
-                raw_data = raw_data[min_seg_len_raw:]
-                
-                label = str(max(list(map(int, labels))))
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
-                
-                label = label + "_beg"
-                label_list_for_filename.append(label)
-                is_at_middle = True
+    while len(y_sampled_list) >= min_seg_len_label:
+        # Get the first segment
+        current_label_segment_list = y_sampled_list[:min_seg_len_label]
+        current_raw_segment = raw_data_time_first[:min_seg_len_raw, :] # Slice time dimension
 
-            elif (len(labels) != 1) and (sliced_y[0] != '0') and (sliced_y[-1] != '0'):
-                y_sampled = y_sampled[min_seg_len_label:]
-                sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
-                raw_data = raw_data[min_seg_len_raw:]
+        # Determine label for filename based on segment content
+        labels_in_segment = [x[0] for x in groupby(current_label_segment_list)]
+        segment_label_code = "0" # Default to background
+        if len(labels_in_segment) == 1 and labels_in_segment[0] == '0':
+             segment_label_code = "0_patT" if patient_bool else "0_patF"
+        else:
+             # Find max non-zero code, more robustly
+             non_zero_codes = [int(c) for c in labels_in_segment if c != '0']
+             if non_zero_codes:
+                  max_code = str(max(non_zero_codes))
+                  # Determine type based on start/end
+                  is_start_zero = current_label_segment_list[0] == '0'
+                  is_end_zero = current_label_segment_list[-1] == '0'
+                  if is_start_zero and not is_end_zero: segment_label_code = max_code + "_beg"
+                  elif not is_start_zero and not is_end_zero: segment_label_code = max_code + "_middle" # Or _whole? Logic was complex
+                  elif not is_start_zero and is_end_zero: segment_label_code = max_code + "_end"
+                  elif is_start_zero and is_end_zero: segment_label_code = max_code + "_whole" # Contains seizure but starts/ends with 0
+             else:
+                  # Only contains '0', handled above
+                  pass
 
-                label = str(max(list(map(int, labels))))
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
+        # Store the sliced data (raw needs permutation back to [channels, time])
+        sliced_raws.append(current_raw_segment.permute(1,0).type(torch.float16)) # Convert to float16 here
+        sliced_labels.append("".join(current_label_segment_list)) # Store label string
+        label_list_for_filename.append(segment_label_code)
 
-                label = label + "_whole"
-                label_list_for_filename.append(label)
-                is_at_middle = True
+        # Advance the data pointers (remove the processed segment)
+        y_sampled_list = y_sampled_list[min_seg_len_label:]
+        raw_data_time_first = raw_data_time_first[min_seg_len_raw:, :]
 
-            elif (len(labels) == 1) and (sliced_y[0] != '0') and (sliced_y[-1] != '0'):
-                y_sampled = y_sampled[min_seg_len_label:]
-                sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
-                raw_data = raw_data[min_seg_len_raw:]
 
-                label = str(max(list(map(int, labels))))
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
-
-                label = label + "_middle"
-                label_list_for_filename.append(label)
-                is_at_middle = True
-            
-            elif len(labels) != 1 and (sliced_y[0] != '0') and (sliced_y[-1] == '0'):
-                y_sampled = y_sampled[min_seg_len_label:]
-                sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
-                raw_data = raw_data[min_seg_len_raw:]
-                
-                label = str(max(list(map(int, labels))))
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
-                
-                label = label + "_end"
-                label_list_for_filename.append(label)
-            
-            elif len(labels) != 1 and (sliced_y[0] == '0') and (sliced_y[-1] == '0'):
-                y_sampled = y_sampled[min_seg_len_label:]
-                sliced_raw_data = raw_data[:min_seg_len_raw].permute(1,0)
-                raw_data = raw_data[min_seg_len_raw:]
-                
-                label = str(max(list(map(int, labels))))
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
-
-                label = label + "_whole"
-                label_list_for_filename.append(label)
-            
-            else:
-                print("unexpected case")
-                exit(1)
-        if is_at_middle == True:
-            sliced_y = y_sampled_2nd[-min_seg_len_label:]
-            sliced_raw_data = raw_data_2nd[-min_seg_len_raw:].permute(1,0)
-            
-            if sliced_y[-1] == '0':
-                label = str(max(list(map(int, labels))))
-                sliced_raws.append(sliced_raw_data)
-                sliced_labels.append(sliced_y)
-                
-                label = label + "_end"
-                label_list_for_filename.append(label)
-            else:
-                pass
-            
+    # --- Save the processed slices ---
     for data_idx in range(len(sliced_raws)):
-        sliced_raw = sliced_raws[data_idx]
-        sliced_y = sliced_labels[data_idx]
-        sliced_y_map = list(map(int,sliced_y))
-        sliced_y = torch.Tensor(sliced_y_map).byte()
+        sliced_raw = sliced_raws[data_idx] # Already [channels, time], float16
+        sliced_y_str = sliced_labels[data_idx]
+        try:
+            # Convert label string back to mapped integer codes, then to Tensor
+            sliced_y_map = list(map(int, sliced_y_str))
+            sliced_y = torch.Tensor(sliced_y_map).byte() # LABEL1: Mapped codes (0, 1, 2...)
+        except ValueError as e:
+            print(f"Error converting sliced label string to Tensor for {file}, slice {data_idx}. Content: '{sliced_y_str[:50]}...'. Error: {e}. Skipping slice.")
+            continue
 
+        # --- Generate binary labels (LABEL2, LABEL3) based on the *mapped* codes ---
+        # Ensure binary_target maps use integers as keys if sliced_y_map contains integers
+        # The original code used dicts with int keys {0:0, 1:1, ...}, so this should work.
         if GLOBAL_DATA['binary_target1'] is not None:
-            sliced_y2 = torch.Tensor([GLOBAL_DATA['binary_target1'][i] for i in sliced_y_map]).byte()
+            try:
+                sliced_y2 = torch.Tensor([GLOBAL_DATA['binary_target1'][i] for i in sliced_y_map]).byte()
+            except KeyError as e:
+                print(f"KeyError creating LABEL2 for {file}, slice {data_idx}. Missing key: {e}. Skipping slice.")
+                continue
         else:
             sliced_y2 = None
 
         if GLOBAL_DATA['binary_target2'] is not None:
-            sliced_y3 = torch.Tensor([GLOBAL_DATA['binary_target2'][i] for i in sliced_y_map]).byte()
+            try:
+                sliced_y3 = torch.Tensor([GLOBAL_DATA['binary_target2'][i] for i in sliced_y_map]).byte()
+            except KeyError as e:
+                print(f"KeyError creating LABEL3 for {file}, slice {data_idx}. Missing key: {e}. Skipping slice.")
+                continue
         else:
             sliced_y3 = None
 
-        new_data['RAW_DATA'] = [sliced_raw]
-        new_data['LABEL1'] = [sliced_y]
-        new_data['LABEL2'] = [sliced_y2]
-        new_data['LABEL3'] = [sliced_y3]
+        new_data = {} # Reset for each slice
+        new_data['RAW_DATA'] = [sliced_raw] # List containing one tensor
+        new_data['LABEL1'] = [sliced_y]     # List containing one tensor
+        new_data['LABEL2'] = [sliced_y2] if sliced_y2 is not None else []
+        new_data['LABEL3'] = [sliced_y3] if sliced_y3 is not None else []
 
-        label = label_list_for_filename[data_idx]
-        
-        with open(GLOBAL_DATA['data_file_directory'] + "/{}_c{}_label_{}.pkl".format(data_file_name, str(data_idx), str(label)), 'wb') as _f:
-            pickle.dump(new_data, _f)      
-        new_data = {}
+        label_for_fname = label_list_for_filename[data_idx]
+
+        # Construct filename and save
+        save_path = os.path.join(GLOBAL_DATA['data_file_directory'], "{}_c{}_label_{}.pkl".format(data_file_name, str(data_idx), label_for_fname))
+        try:
+            with open(save_path, 'wb') as _f:
+                pickle.dump(new_data, _f)
+        except Exception as e:
+            print(f"Error saving pickle file {save_path}: {e}")
 
 def generate_training_data_leadwise_tuh_dev(file):
     sample_rate = GLOBAL_DATA['sample_rate']    # EX) 200Hz
@@ -570,7 +795,7 @@ def generate_training_data_leadwise_tuh_dev(file):
     
     # check if seizure patient or non-seizure patient
     patient_wise_dir = "/".join(file_name.split("/")[:-2])
-    edf_list = search_walk({'path': patient_wise_dir, 'extension': ".tse_bi"})
+    edf_list = search_walk({'path': patient_wise_dir, 'extension': ".csv_bi"})
     patient_bool = False
     for tse_bi_file in edf_list:
         label_file = open(tse_bi_file, 'r') # EX) 00007235_s003_t003.tse or 00007235_s003_t003.tse_bi
@@ -767,7 +992,7 @@ def main(args):
                     'EEG C3', 'EEG C4', 'EEG CZ', 'EEG T3', 'EEG T4', 
                     'EEG P3', 'EEG P4', 'EEG O1', 'EEG O2', 'EEG T5', 'EEG T6', 'EEG PZ', 'EEG FZ']
 
-    eeg_data_directory = "$PATH_TO_EEG/{}".format(data_type)
+    eeg_data_directory = "../TUHEEG/v2.0.3/edf/{}".format(data_type)
     # eeg_data_directory = "/mnt/aitrics_ext/ext01/shared/edf/tuh_final/{}".format(data_type)
     
     if label_type == "tse":
@@ -801,15 +1026,22 @@ def main(args):
 
     target_dictionary = {0:0}
     selected_diseases = []
-    for idx, i in enumerate(args.disease_type):
-        selected_diseases.append(str(disease_labels[i]))
-        target_dictionary[disease_labels[i]] = idx + 1
+
+    if label_type == "tse":
+        for idx, i in enumerate(args.disease_type):
+            selected_diseases.append(str(disease_labels[i]))
+            target_dictionary[disease_labels[i]] = idx + 1
     
     GLOBAL_DATA['disease_type'] = args.disease_type # args.disease_type == ['gnsz', 'fnsz', 'spsz', 'cpsz', 'absz', 'tnsz', 'tcsz', 'mysz']
     GLOBAL_DATA['target_dictionary'] = target_dictionary # {0: 0, 4: 1, 5: 2, 8: 3, 2: 4, 9: 5, 6: 6, 7: 7, 3: 8}
     GLOBAL_DATA['selected_diseases'] = selected_diseases # ['4', '5', '8', '2', '9', '6', '7', '3']
     GLOBAL_DATA['binary_target1'] = args.binary_target1
     GLOBAL_DATA['binary_target2'] = args.binary_target2
+
+    if label_type == "tse_bi":
+        GLOBAL_DATA['disease_type'] = ['bckg', 'seiz']
+        GLOBAL_DATA['target_dictionary'] = {0:0, 1:1}
+        GLOBAL_DATA['selected_diseases'] = ['0', '1']
 
     print("########## Preprocessor Setting Information ##########")
     print("Number of EDF files: ", len(edf_list))

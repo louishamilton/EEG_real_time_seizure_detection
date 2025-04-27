@@ -26,8 +26,6 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.utils.rnn as rnn_utils
 from torch.autograd import Variable
-from torchsummary import summary
-from torchinfo import summary
 
 from builder.utils.lars import LARC
 from control.config import args
@@ -37,6 +35,7 @@ from builder.data.data_preprocess import get_data_preprocessed
 from builder.models import get_detector_model, grad_cam
 from builder.utils.logger import Logger
 from builder.utils.utils import set_seeds, set_devices
+from builder.utils.result_utils import experiment_results_validation, experiment_results
 from builder.utils.cosine_annealing_with_warmup import CosineAnnealingWarmUpRestarts
 from builder.utils.cosine_annealing_with_warmupSingle import CosineAnnealingWarmUpSingle
 from builder.trainer import get_trainer
@@ -148,7 +147,44 @@ for seed_num in args.seed_list:
         pbar.update(1)
 
     logger.val_result_only()
-    save_valid_results.results_all_seeds(logger.test_results)
+    if hasattr(logger, 'best_result_so_far') and len(logger.best_result_so_far) > 0 and hasattr(logger, 'best_results') and len(logger.best_results) == 4:
+        # Construct the validation result in the expected format: [[seed, auc, apr, f1], tpr, tnr]
+        # Note: logger.best_results stores [tpr, fnr, tnr, fpr]
+        best_val_tpr = logger.best_results[0]
+        best_val_tnr = logger.best_results[2]
+        # logger.best_result_so_far stores [auc, apr, f1]
+        result_summary = [args.seed, logger.best_result_so_far[0], logger.best_result_so_far[1], logger.best_result_so_far[2]]
+        
+        formatted_val_result = [result_summary, best_val_tpr, best_val_tnr] # This might still be wrong if it expects 4 items unpacked directly
+
+        # *** Revised based on the unpacking error expecting 4 items ***
+        # It likely expects a single list/tuple with 4 elements: [seed, [auc, apr, f1], tpr, tnr] or similar.
+        # Let's match the structure used later for test_results: [[seed, auc, apr, f1], tpr, tnr]
+        # The error 'expected 4, got 0' implies it might iterate over the input list and unpack each item.
+        # Let's assume it expects a list containing ONE item structured like test_results:
+        
+        packed_best_val_result = [[
+             [args.seed, logger.best_result_so_far[0], logger.best_result_so_far[1], logger.best_result_so_far[2]], # This is 'result' in the unpack
+             logger.best_results[0], # This is 'tpr'
+             logger.best_results[2]  # This is 'tnr'
+        ]]
+        # The unpack 'seed, result, tpr, tnr' still doesn't quite match this structure.
+
+        # *** Let's reconsider the unpack: `seed, result, tpr, tnr = list_of_test_results_per_seed` ***
+        # This implies list_of_test_results_per_seed should look like: [some_seed, [auc, apr, f1], some_tpr, some_tnr]
+        
+        validation_result_to_save = [
+            args.seed,                          # seed
+            list(logger.best_result_so_far),    # result (list of auc, apr, f1)
+            logger.best_results[0],             # tpr
+            logger.best_results[2]              # tnr
+        ]
+        
+        # Now call the method with the correctly formatted validation result for this seed
+        save_valid_results.results_all_seeds(validation_result_to_save) # Pass the list directly
+    
+    else:
+        print("Skipping saving validation results as they were not properly recorded.")
     
     # get model checkpoint - end of train step
     # initalize model (again)

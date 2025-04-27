@@ -23,7 +23,7 @@ import torch.nn as nn
 
 from control.config import args
 from builder.data.data_preprocess import get_data_preprocessed
-from builder.models import get_detector_model, get_multiclassification_model, grad_cam, get_augmentation
+from builder.models import get_detector_model
 from builder.utils.metrics import Evaluator
 from builder.utils.logger import Logger
 from builder.trainer.trainer import *
@@ -105,15 +105,13 @@ for name in names:
                 print("Selected trainer is not prepared yet...")
                 exit(1)
             
-            if not args.ignore_model_speed:
-                iteration_end = time.time()
-                print("1: ", num_windows)
-                print("used device: ", device)
-                print("the number of cpu threads: {}".format(torch.get_num_threads()))
+            iteration_end = time.time()
+            print("1: ", num_windows)
+            print("used device: ", device)
+            print("the number of cpu threads: {}".format(torch.get_num_threads()))
 
-                print(f'Time taken to iterate once :    {(iteration_end-iteration_start)} seconds')
-                print(f'Time taken per window slide :    {(iteration_end-iteration_start)/num_windows} seconds')
-                exit(1)
+            print(f'Time taken to iterate once :    {(iteration_end-iteration_start)} seconds')
+            print(f'Time taken per window slide :    {(iteration_end-iteration_start)/num_windows} seconds')
 
     # print(f'Time taken to iterate once :    {(iteration_end-iteration_start)} seconds')
     # print(f'Time taken per window slide :    {(iteration_end-iteration_start)/num_windows} seconds')

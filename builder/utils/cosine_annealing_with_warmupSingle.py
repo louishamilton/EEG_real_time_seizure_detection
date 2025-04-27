@@ -116,6 +116,16 @@ class CosineAnnealingWarmUpSingle(torch.optim.lr_scheduler.OneCycleLR):
                     group['base_momentum'] = b_momentum
         _LRScheduler.__init__(self, optimizer, last_epoch=last_epoch, verbose=verbose)
 
+        # Add this method definition inside the CosineAnnealingWarmUpSingle class:
+    def _format_param(self, name, optimizer, param):
+        """Format scheduler param to list"""
+        if isinstance(param, (list, tuple)):
+            if len(param) != len(optimizer.param_groups):
+                raise ValueError("param {} must have the same length as optimizer.param_groups".format(name))
+            return param
+        else:
+            # Makes a list of the param value, one for each param group in the optimizer
+            return [param] * len(optimizer.param_groups)
 
     def get_lr(self):
         if not self._get_lr_called_within_step:
