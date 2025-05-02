@@ -148,9 +148,9 @@ class InvertedResidual(nn.Module):
             return x
 
 
-class MOBILENETV3_V2(nn.Module):
+class MOBILENETV3(nn.Module):
     def __init__(self, args, device):
-        super(MOBILENETV3_V2, self).__init__()
+        super(MOBILENETV3, self).__init__()
         # setting of inverted residual blocks
         # self.cfgs = cfgs
         self.args = args

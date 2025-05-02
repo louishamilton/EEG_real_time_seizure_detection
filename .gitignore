@@ -127,3 +127,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+control/path_configs.yaml
+control/path_configs.yaml

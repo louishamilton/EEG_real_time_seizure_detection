@@ -87,9 +87,9 @@ class TDNN(nn.Module):
 
 
 
-class TDNN_LSTM_V1(nn.Module):
+class TDNN_LSTM(nn.Module):
     def __init__(self, args, device):
-        super(TDNN_LSTM_V1, self).__init__()
+        super(TDNN_LSTM, self).__init__()
         self.args = args
 
         self.num_layers = self.args.num_layers
@@ -97,7 +97,7 @@ class TDNN_LSTM_V1(nn.Module):
         self.num_data_channel = self.args.num_channel
         self.tdnn_input_dim = self.args.sincnet_bandnum
         self.sincnet_bandnum = args.sincnet_bandnum
-                
+
         self.feature_extractor = nn.ModuleDict([
                                 ['psd1', PSD_FEATURE1()],
                                 ['psd2', PSD_FEATURE2()],

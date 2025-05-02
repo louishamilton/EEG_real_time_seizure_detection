@@ -44,9 +44,9 @@ class BasicBlock(nn.Module):
         out = F.relu(out)
         return out
 
-class CNN2D_LSTM_V8_6(nn.Module):
+class RESNET_DILATION_LSTM(nn.Module):
         def __init__(self, args, device):
-                super(CNN2D_LSTM_V8_6, self).__init__()      
+                super(RESNET_DILATION_LSTM, self).__init__()      
                 self.args = args
 
                 self.num_layers = args.num_layers

@@ -135,9 +135,9 @@ class InvertedResidual(nn.Module):
             x = self.conv(x)
             return x
 
-class CNN2D_LSTM_V8_10(nn.Module):
+class MOBILENET_LSTM(nn.Module):
         def __init__(self, args, device):
-                super(CNN2D_LSTM_V8_10, self).__init__()      
+                super(MOBILENET_LSTM, self).__init__()      
                 self.args = args
 
                 self.num_layers = args.num_layers
