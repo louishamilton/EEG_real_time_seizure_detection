@@ -85,7 +85,7 @@ class RESNET18_CONV1D(nn.Module):
         x = x+x_res8
 
         x = self.avgpool(x)
-        x = torch.squeeze(x)
+        x = torch.squeeze(x, -1)
         x = self.fc1(x)
         return x, 0
 

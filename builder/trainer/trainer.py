@@ -120,9 +120,7 @@ def sliding_window_v1(args, iteration, train_x, train_y, seq_lengths, target_len
             optimizer.zero_grad()
 
         logits, maps = model(seq_slice)
-        # print("maps: ", maps)
-        # exit(1)
-        logits = logits.type(torch.FloatTensor)
+        logits = logits.type(torch.FloatTensor) # Ensure float type
         
         if flow_type == "train":
             loss = criterion(logits, final_target)
