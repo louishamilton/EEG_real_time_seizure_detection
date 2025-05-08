@@ -1,5 +1,23 @@
 # Real-Time Seizure Detection using Electroencephalogram (EEG)
 
+This is a fork of the EEG_real_time_seizure_detection
+
+To run the code and recieve resulting metrics you do the following steps:
+
+- Download the dataset
+- Set location of stored dataset in preprocessing script (eeg_data_directory variable on line 995)
+- Run 1_preprocess.py script
+- Set data_path in path_config.yaml to location of preprocessed data
+- Do the following steps for each model:
+- Run 2_train.py script
+- Set dir_result in path_config.yaml to loaction of trained model
+- Run 3_test.py script
+- Run 4_seiz_test.py script
+
+Their Readme below gives some more details:
+
+------------
+
 This is the repository for ["Real-Time Seizure Detection using EEG: A Comprehensive Comparison of Recent Approaches under a Realistic Setting"](https://proceedings.mlr.press/v174/lee22a/lee22a.pdf). You can checkout [pdf file](paper/Real-Time%20Seizure%20Detection%20using%20EEG-A%20Comprehensive%20Comparison%20of%20Recent%20Approaches%20under%20a%20Realistic%20Setting.pdf) of our paper in our github repo.
 
 - If you have used our code or referred to our result in your research, please cite:
