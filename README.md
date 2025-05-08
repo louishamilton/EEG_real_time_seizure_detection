@@ -1,6 +1,6 @@
 # Real-Time Seizure Detection using Electroencephalogram (EEG)
 
-This is a fork of the EEG_real_time_seizure_detection
+This is a fork of [AITRICS/EEG_real_time_seizure_detection](https://github.com/AITRICS/EEG_real_time_seizure_detection)
 
 To run the code and recieve resulting metrics you do the following steps:
 
